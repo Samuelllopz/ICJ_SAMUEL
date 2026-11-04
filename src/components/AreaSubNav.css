@@ -1,0 +1,42 @@
+.area-subnav {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--divider);
+  position: sticky;
+  top: var(--navbar-height);
+  z-index: 900;
+  transition: background-color var(--transition);
+}
+
+.area-subnav-inner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.area-subnav-inner::-webkit-scrollbar {
+  display: none;
+}
+
+.area-subnav-link {
+  padding: 14px 18px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 3px solid transparent;
+  white-space: nowrap;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.area-subnav-link:hover {
+  color: var(--accent);
+}
+
+.area-subnav-link.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}

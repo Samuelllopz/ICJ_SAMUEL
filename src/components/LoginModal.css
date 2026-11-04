@@ -1,0 +1,223 @@
+.login-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3500;
+  padding: 20px;
+}
+
+.login-modal-card {
+  background: var(--bg-card);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  max-width: 480px;
+  width: 100%;
+  padding: 28px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.login-badge-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-icon {
+  font-size: 2rem;
+}
+
+.login-badge-header h3 {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.login-badge-header p {
+  font-size: 0.8rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.login-close-btn {
+  background: none;
+  border: none;
+  font-size: 1.3rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition);
+}
+
+.login-close-btn:hover {
+  color: var(--text-primary);
+}
+
+/* Barra de sesión actual */
+.current-session-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--divider);
+}
+
+.session-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  display: block;
+}
+
+.current-session-bar strong {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.role-pill {
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.role-pill.admin {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.role-pill.user {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--divider);
+}
+
+/* Explicación de roles */
+.roles-explanation-box {
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.8rem;
+  border-left: 3px solid var(--accent);
+}
+
+.role-exp-item strong {
+  color: var(--text-primary);
+}
+
+.role-exp-item p {
+  color: var(--text-secondary);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* Formulario */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-error-alert {
+  padding: 10px 12px;
+  background: rgba(255, 82, 82, 0.15);
+  border: 1px solid #ff5252;
+  border-radius: 6px;
+  color: #ff5252;
+  font-size: 0.85rem;
+}
+
+/* Acceso Rápido */
+.quick-access-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+  border-top: 1px solid var(--divider);
+  padding-top: 14px;
+}
+
+.quick-divider-text {
+  font-size: 0.78rem;
+  text-align: center;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.quick-buttons-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.btn-quick-role {
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition);
+  border: 1px solid var(--divider);
+  text-align: center;
+}
+
+.btn-quick-role.admin {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn-quick-role.admin:hover {
+  background: var(--accent);
+  color: #000;
+}
+
+.btn-quick-role.user {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.btn-quick-role.user:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--text-secondary);
+}
+
+.credentials-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+
+.credentials-hint code {
+  color: var(--accent);
+  background: var(--bg-card);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.btn-logout-link {
+  background: none;
+  border: none;
+  color: #ff5252;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: underline;
+}

@@ -1,0 +1,51 @@
+.acerca-section {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 60px;
+  align-items: center;
+  margin-bottom: 60px;
+}
+
+.acerca-text p {
+  color: var(--text-secondary);
+  line-height: 1.8;
+  font-size: 1rem;
+}
+
+.acerca-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.about-badge {
+  font-size: 8rem;
+  filter: drop-shadow(0 0 30px rgba(240, 165, 0, 0.25));
+}
+
+.vision-box {
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 36px;
+  border-left: 4px solid var(--accent);
+}
+
+.vision-box h3 {
+  font-size: 1.4rem;
+  font-weight: 800;
+  margin: 8px 0 16px;
+}
+
+.vision-box p {
+  color: var(--text-secondary);
+  line-height: 1.8;
+  font-size: 1rem;
+}
+
+@media (max-width: 768px) {
+  .acerca-section {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+}
