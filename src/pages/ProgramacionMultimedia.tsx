@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import readXlsxFile from 'read-excel-file/browser';
+import readXlsxFile, { readSheet } from 'read-excel-file/browser';
 import { useAuth } from '../context/AuthContext';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 import './ProgramacionMultimedia.css';
@@ -8,12 +8,19 @@ const PROGRAMACION_IMG_KEY = 'icj-programacion-foto';
 const PROGRAMACION_EXCEL_KEY = 'icj-programacion-excel-data';
 const PROGRAMACION_EXCEL_NAME_KEY = 'icj-programacion-excel-name';
 const PROGRAMACION_EXCEL_RAW_KEY = 'icj-programacion-excel-raw';
+const PROGRAMACION_EXCEL_HOJAS_KEY = 'icj-programacion-excel-hojas';
 const LINK_OFICIAL = 'https://acortar.link/L95EAY';
+
+interface SheetTab {
+  sheetName: string;
+  rows: (string | number)[][];
+}
 
 interface ExcelDataState {
   sheetName: string;
   rows: (string | number)[][];
   fileName: string;
+  hojas?: SheetTab[];
 }
 
 // Función auxiliar para comprimir imagen de programación antes de subir
@@ -50,6 +57,89 @@ async function comprimirFoto(file: File, maxPx = 1600, quality = 0.8): Promise<s
     };
     reader.readAsDataURL(file);
   });
+}
+
+// Función universal inteligente para parsear cualquier archivo Excel (.xlsx)
+async function parsearExcelCompleto(file: File): Promise<{
+  hojas: SheetTab[];
+  filasPrincipales: (string | number)[][];
+  hojaPrincipalNombre: string;
+}> {
+  const hojas: SheetTab[] = [];
+
+  // Intento 1: Leer todas las hojas del libro con readXlsxFile
+  try {
+    const rawResult: any = await readXlsxFile(file);
+
+    if (Array.isArray(rawResult) && rawResult.length > 0) {
+      for (const item of rawResult) {
+        // En read-excel-file v9, cada hoja es { sheet: string, data: Row[] }
+        if (item && typeof item === 'object' && 'data' in item && Array.isArray(item.data)) {
+          const sName = String(item.sheet || 'Hoja');
+          const cleanRows: (string | number)[][] = [];
+
+          for (const row of item.data) {
+            if (Array.isArray(row) && row.some(c => c !== null && c !== undefined && String(c).trim() !== '')) {
+              const rowVals = row.map(cell => {
+                if (cell === null || cell === undefined) return '';
+                if (cell instanceof Date) return cell.toLocaleDateString('es-ES');
+                return String(cell).trim();
+              });
+              cleanRows.push(rowVals);
+            }
+          }
+
+          if (cleanRows.length > 0) {
+            hojas.push({ sheetName: sName, rows: cleanRows });
+          }
+        } else if (Array.isArray(item)) {
+          // Si por compatibilidad de versión devolvió directamente un array de filas
+          const row = item;
+          if (row.some(c => c !== null && c !== undefined && String(c).trim() !== '')) {
+            const rowVals = row.map(cell => {
+              if (cell === null || cell === undefined) return '';
+              if (cell instanceof Date) return cell.toLocaleDateString('es-ES');
+              return String(cell).trim();
+            });
+            if (hojas.length === 0) hojas.push({ sheetName: 'Hoja 1', rows: [] });
+            hojas[0].rows.push(rowVals);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('readXlsxFile inicial falló o requiere lectura por hoja:', err);
+  }
+
+  // Intento 2: Si no encontró filas con readXlsxFile, intentar con readSheet
+  if (hojas.length === 0) {
+    try {
+      const sheetRows: any = await readSheet(file);
+      if (Array.isArray(sheetRows) && sheetRows.length > 0) {
+        const cleanRows: (string | number)[][] = [];
+        for (const row of sheetRows) {
+          if (Array.isArray(row) && row.some(c => c !== null && c !== undefined && String(c).trim() !== '')) {
+            cleanRows.push(
+              row.map(cell =>
+                cell instanceof Date ? cell.toLocaleDateString('es-ES') : String(cell ?? '').trim()
+              )
+            );
+          }
+        }
+        if (cleanRows.length > 0) {
+          hojas.push({ sheetName: 'Hoja 1', rows: cleanRows });
+        }
+      }
+    } catch (sheetErr) {
+      console.warn('readSheet intento falló:', sheetErr);
+    }
+  }
+
+  const primeraConDatos = hojas.find(h => h.rows.length > 0) || hojas[0];
+  const filasPrincipales = primeraConDatos ? primeraConDatos.rows : [];
+  const hojaPrincipalNombre = primeraConDatos ? primeraConDatos.sheetName : 'Programación';
+
+  return { hojas, filasPrincipales, hojaPrincipalNombre };
 }
 
 const ProgramacionMultimedia: React.FC = () => {
@@ -95,11 +185,10 @@ const ProgramacionMultimedia: React.FC = () => {
           // Cargar datos de Excel desde Supabase
           if (data.excel_filas && Array.isArray(data.excel_filas) && data.excel_filas.length > 0) {
             setExcelData({
-              sheetName: 'Programación de Servicios',
+              sheetName: data.excel_nombre ? `Hoja Principal` : 'Programación',
               rows: data.excel_filas,
               fileName: data.excel_nombre || 'Programacion_Multimedia.xlsx',
             });
-            // Guardar copia local como respaldo rápido
             try {
               localStorage.setItem(PROGRAMACION_EXCEL_KEY, JSON.stringify(data.excel_filas));
               if (data.excel_nombre) localStorage.setItem(PROGRAMACION_EXCEL_NAME_KEY, data.excel_nombre);
@@ -146,12 +235,16 @@ const ProgramacionMultimedia: React.FC = () => {
       const savedExcelJson = localStorage.getItem(PROGRAMACION_EXCEL_KEY);
       const savedExcelName = localStorage.getItem(PROGRAMACION_EXCEL_NAME_KEY);
       const savedExcelRaw = localStorage.getItem(PROGRAMACION_EXCEL_RAW_KEY);
+      const savedHojas = localStorage.getItem(PROGRAMACION_EXCEL_HOJAS_KEY);
+
       if (savedExcelJson) {
         const rows = JSON.parse(savedExcelJson);
+        const hojas = savedHojas ? JSON.parse(savedHojas) : undefined;
         setExcelData({
           sheetName: 'Programación',
           rows,
           fileName: savedExcelName || 'Programacion_Multimedia.xlsx',
+          hojas,
         });
       }
       if (savedExcelRaw) {
@@ -168,7 +261,7 @@ const ProgramacionMultimedia: React.FC = () => {
     cargarProgramacion();
   }, []);
 
-  // Manejo de carga de archivo Excel (.xlsx)
+  // Manejo de carga de archivo Excel (.xlsx) con extractor multihonja
   const handleSubirExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
@@ -176,27 +269,19 @@ const ProgramacionMultimedia: React.FC = () => {
       setGuardandoEnNube(true);
 
       try {
-        const rawRows = await readXlsxFile(file);
+        const { hojas, filasPrincipales, hojaPrincipalNombre } = await parsearExcelCompleto(file);
 
-        // Convertir celdas a string/number y filtrar filas vacías
-        const cleanRows: (string | number)[][] = [];
-        for (const row of rawRows) {
-          if (Array.isArray(row) && row.some(c => c !== null && c !== undefined && c !== '')) {
-            const rowValues = row.map(cell => {
-              if (cell === null || cell === undefined) return '';
-              if (cell instanceof Date) {
-                return cell.toLocaleDateString('es-ES');
-              }
-              return String(cell);
-            });
-            cleanRows.push(rowValues);
-          }
+        if (filasPrincipales.length === 0) {
+          alert(
+            `El archivo "${fileName}" se abrió correctamente, pero no se detectaron filas con texto en sus celdas. Asegúrate de que el archivo contenga datos en sus hojas de cálculo.`
+          );
         }
 
         const newState: ExcelDataState = {
-          sheetName: 'Programación de Servicios',
-          rows: cleanRows,
+          sheetName: hojaPrincipalNombre,
+          rows: filasPrincipales,
           fileName,
+          hojas: hojas.length > 1 ? hojas : undefined,
         };
 
         setExcelData(newState);
@@ -204,10 +289,13 @@ const ProgramacionMultimedia: React.FC = () => {
 
         // Guardar tabla estructurada localmente
         try {
-          localStorage.setItem(PROGRAMACION_EXCEL_KEY, JSON.stringify(cleanRows));
+          localStorage.setItem(PROGRAMACION_EXCEL_KEY, JSON.stringify(filasPrincipales));
           localStorage.setItem(PROGRAMACION_EXCEL_NAME_KEY, fileName);
+          if (hojas.length > 1) {
+            localStorage.setItem(PROGRAMACION_EXCEL_HOJAS_KEY, JSON.stringify(hojas));
+          }
         } catch {
-          console.warn('Almacenamiento lleno para tabla Excel.');
+          console.warn('Almacenamiento lleno para tabla Excel local.');
         }
 
         // Obtener Base64 para descarga y almacenamiento en Supabase
@@ -227,14 +315,18 @@ const ProgramacionMultimedia: React.FC = () => {
               const { error } = await supabase.from('programacion_multimedia').upsert({
                 id: 'actual',
                 excel_nombre: fileName,
-                excel_filas: cleanRows,
+                excel_filas: filasPrincipales,
                 excel_raw: b64,
                 updated_at: new Date().toISOString(),
               });
 
               if (!error) {
                 setUsandoSupabase(true);
-                alert('✅ ¡Hoja de Excel guardada con éxito en la nube! Ahora es visible en todas las computadoras y teléfonos.');
+                alert(
+                  `✅ ¡Hoja de Excel guardada con éxito en la nube! Se leyeron ${filasPrincipales.length} filas${
+                    hojas.length > 1 ? ` distribuidas en ${hojas.length} pestañas` : ''
+                  }. Ya es visible en todas las computadoras y teléfonos.`
+                );
               } else {
                 console.warn('Detalle al subir Excel a Supabase:', error);
                 alert('Aviso: El Excel se guardó localmente. Si aún no creaste la tabla en Supabase, ejecuta el script SQL.');
@@ -247,8 +339,8 @@ const ProgramacionMultimedia: React.FC = () => {
         };
         readerBase64.readAsDataURL(file);
       } catch (err) {
-        console.error(err);
-        alert('Error al procesar el archivo Excel. Asegúrate de que sea un archivo .xlsx válido.');
+        console.error('Error al procesar Excel:', err);
+        alert('Error al leer el archivo Excel. Asegúrate de que sea un archivo .xlsx válido.');
         setGuardandoEnNube(false);
       }
     }
@@ -270,22 +362,30 @@ const ProgramacionMultimedia: React.FC = () => {
 
   // Eliminar Excel
   const handleEliminarExcel = async () => {
-    if (window.confirm('¿Deseas quitar la hoja de Excel actual de la programación? Se eliminará de la nube para todos los dispositivos.')) {
+    if (
+      window.confirm(
+        '¿Deseas quitar la hoja de Excel actual de la programación? Se eliminará de la nube para todos los dispositivos.'
+      )
+    ) {
       setExcelData(null);
       setExcelRawBase64(null);
       localStorage.removeItem(PROGRAMACION_EXCEL_KEY);
       localStorage.removeItem(PROGRAMACION_EXCEL_NAME_KEY);
       localStorage.removeItem(PROGRAMACION_EXCEL_RAW_KEY);
+      localStorage.removeItem(PROGRAMACION_EXCEL_HOJAS_KEY);
       if (fileInputExcelRef.current) fileInputExcelRef.current.value = '';
 
       if (isSupabaseConfigured) {
         try {
-          await supabase.from('programacion_multimedia').update({
-            excel_nombre: null,
-            excel_filas: null,
-            excel_raw: null,
-            updated_at: new Date().toISOString(),
-          }).eq('id', 'actual');
+          await supabase
+            .from('programacion_multimedia')
+            .update({
+              excel_nombre: null,
+              excel_filas: null,
+              excel_raw: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', 'actual');
         } catch (err) {
           console.warn('Error al limpiar Excel en Supabase:', err);
         }
@@ -347,10 +447,13 @@ const ProgramacionMultimedia: React.FC = () => {
 
       if (isSupabaseConfigured) {
         try {
-          await supabase.from('programacion_multimedia').update({
-            foto_url: null,
-            updated_at: new Date().toISOString(),
-          }).eq('id', 'actual');
+          await supabase
+            .from('programacion_multimedia')
+            .update({
+              foto_url: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', 'actual');
         } catch (err) {
           console.warn('Error al limpiar foto en Supabase:', err);
         }
@@ -385,7 +488,7 @@ const ProgramacionMultimedia: React.FC = () => {
                 background: 'rgba(16, 185, 129, 0.2)',
                 color: '#10b981',
                 border: '1px solid rgba(16, 185, 129, 0.4)',
-                fontSize: '0.82rem'
+                fontSize: '0.82rem',
               }}
             >
               🟢 Sincronizado en Supabase Cloud (Visible en todas las computadoras)
@@ -397,7 +500,7 @@ const ProgramacionMultimedia: React.FC = () => {
                 background: 'rgba(245, 158, 11, 0.2)',
                 color: '#f59e0b',
                 border: '1px solid rgba(245, 158, 11, 0.4)',
-                fontSize: '0.82rem'
+                fontSize: '0.82rem',
               }}
             >
               🟡 Modo Local (LocalStorage)
@@ -479,7 +582,9 @@ const ProgramacionMultimedia: React.FC = () => {
                 </h2>
                 <p className="section-subtitle">
                   {excelData
-                    ? `Archivo: ${excelData.fileName} • ${excelData.rows.length} filas leídas`
+                    ? `Archivo: ${excelData.fileName} • ${excelData.rows.length} filas leídas ${
+                        excelData.sheetName ? `(${excelData.sheetName})` : ''
+                      }`
                     : 'Puedes subir el archivo .xlsx de la programación para visualizar la tabla interactiva.'}
                 </p>
               </div>
@@ -528,6 +633,29 @@ const ProgramacionMultimedia: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {/* Selector de pestañas / hojas si el libro tiene más de una */}
+            {excelData && excelData.hojas && excelData.hojas.length > 1 && (
+              <div className="excel-sheets-selector">
+                <span className="sheets-label">📑 Pestañas del libro:</span>
+                {excelData.hojas.map((h, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className={`sheet-tab-chip ${excelData.sheetName === h.sheetName ? 'active' : ''}`}
+                    onClick={() => {
+                      setExcelData({
+                        ...excelData,
+                        sheetName: h.sheetName,
+                        rows: h.rows,
+                      });
+                    }}
+                  >
+                    {h.sheetName} ({h.rows.length} filas)
+                  </button>
+                ))}
+              </div>
+            )}
 
             {excelData && excelData.rows.length > 0 ? (
               <div className="excel-viewer-card">
@@ -584,7 +712,7 @@ const ProgramacionMultimedia: React.FC = () => {
                 onClick={() => isAdmin && fileInputExcelRef.current?.click()}
               >
                 <span className="placeholder-icon">📊</span>
-                <h3>Aún no se ha cargado una hoja de Excel</h3>
+                <h3>Aún no se ha cargado una hoja de Excel con filas</h3>
                 <p>
                   {isAdmin
                     ? 'Haz clic aquí o en el botón superior para subir el archivo .xlsx con la programación.'
