@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import readXlsxFile from 'read-excel-file/browser';
 import { useAuth } from '../context/AuthContext';
+import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 import './ProgramacionMultimedia.css';
 
 const PROGRAMACION_IMG_KEY = 'icj-programacion-foto';
@@ -13,6 +14,42 @@ interface ExcelDataState {
   sheetName: string;
   rows: (string | number)[][];
   fileName: string;
+}
+
+// Función auxiliar para comprimir imagen de programación antes de subir
+async function comprimirFoto(file: File, maxPx = 1600, quality = 0.8): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = ev => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let { width: w, height: h } = img;
+        if (w > maxPx || h > maxPx) {
+          if (w >= h) {
+            h = Math.round((h * maxPx) / w);
+            w = maxPx;
+          } else {
+            w = Math.round((w * maxPx) / h);
+            h = maxPx;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } else {
+          resolve(ev.target?.result as string);
+        }
+      };
+      img.src = ev.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 const ProgramacionMultimedia: React.FC = () => {
@@ -30,17 +67,82 @@ const ProgramacionMultimedia: React.FC = () => {
   const [fotoProgramacion, setFotoProgramacion] = useState<string | null>(null);
   const [lightboxAbierto, setLightboxAbierto] = useState(false);
 
+  // Estado de sincronización en la nube
+  const [usandoSupabase, setUsandoSupabase] = useState(false);
+  const [cargandoNube, setCargandoNube] = useState(false);
+  const [guardandoEnNube, setGuardandoEnNube] = useState(false);
+
   // Referencias a inputs de archivo
   const fileInputFotoRef = useRef<HTMLInputElement>(null);
   const fileInputExcelRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    // Cargar imagen guardada
-    const savedImg = localStorage.getItem(PROGRAMACION_IMG_KEY);
-    if (savedImg) setFotoProgramacion(savedImg);
+  // Cargar programación (primero de Supabase Cloud, luego fallback local)
+  const cargarProgramacion = async () => {
+    setCargandoNube(true);
 
-    // Cargar datos de Excel guardados
+    // 1. Intentar cargar desde Supabase Cloud
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('programacion_multimedia')
+          .select('*')
+          .eq('id', 'actual')
+          .maybeSingle();
+
+        if (!error && data) {
+          setUsandoSupabase(true);
+
+          // Cargar datos de Excel desde Supabase
+          if (data.excel_filas && Array.isArray(data.excel_filas) && data.excel_filas.length > 0) {
+            setExcelData({
+              sheetName: 'Programación de Servicios',
+              rows: data.excel_filas,
+              fileName: data.excel_nombre || 'Programacion_Multimedia.xlsx',
+            });
+            // Guardar copia local como respaldo rápido
+            try {
+              localStorage.setItem(PROGRAMACION_EXCEL_KEY, JSON.stringify(data.excel_filas));
+              if (data.excel_nombre) localStorage.setItem(PROGRAMACION_EXCEL_NAME_KEY, data.excel_nombre);
+            } catch {
+              // sin problemas
+            }
+          }
+
+          if (data.excel_raw) {
+            setExcelRawBase64(data.excel_raw);
+            try {
+              localStorage.setItem(PROGRAMACION_EXCEL_RAW_KEY, data.excel_raw);
+            } catch {
+              // sin problemas
+            }
+          }
+
+          // Cargar foto afiche desde Supabase
+          if (data.foto_url) {
+            setFotoProgramacion(data.foto_url);
+            try {
+              localStorage.setItem(PROGRAMACION_IMG_KEY, data.foto_url);
+            } catch {
+              // sin problemas
+            }
+          }
+
+          setCargandoNube(false);
+          return;
+        } else if (!error && !data) {
+          // La tabla existe pero aún no tiene fila creada
+          setUsandoSupabase(true);
+        }
+      } catch (err) {
+        console.warn('Error conectando a Supabase para programación:', err);
+      }
+    }
+
+    // 2. Fallback a LocalStorage si está offline
     try {
+      const savedImg = localStorage.getItem(PROGRAMACION_IMG_KEY);
+      if (savedImg) setFotoProgramacion(savedImg);
+
       const savedExcelJson = localStorage.getItem(PROGRAMACION_EXCEL_KEY);
       const savedExcelName = localStorage.getItem(PROGRAMACION_EXCEL_NAME_KEY);
       const savedExcelRaw = localStorage.getItem(PROGRAMACION_EXCEL_RAW_KEY);
@@ -58,6 +160,12 @@ const ProgramacionMultimedia: React.FC = () => {
     } catch {
       // fallback
     }
+
+    setCargandoNube(false);
+  };
+
+  useEffect(() => {
+    cargarProgramacion();
   }, []);
 
   // Manejo de carga de archivo Excel (.xlsx)
@@ -65,6 +173,7 @@ const ProgramacionMultimedia: React.FC = () => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       const fileName = file.name;
+      setGuardandoEnNube(true);
 
       try {
         const rawRows = await readXlsxFile(file);
@@ -93,7 +202,7 @@ const ProgramacionMultimedia: React.FC = () => {
         setExcelData(newState);
         setFormatoActivo('excel');
 
-        // Guardar tabla estructurada
+        // Guardar tabla estructurada localmente
         try {
           localStorage.setItem(PROGRAMACION_EXCEL_KEY, JSON.stringify(cleanRows));
           localStorage.setItem(PROGRAMACION_EXCEL_NAME_KEY, fileName);
@@ -101,9 +210,9 @@ const ProgramacionMultimedia: React.FC = () => {
           console.warn('Almacenamiento lleno para tabla Excel.');
         }
 
-        // Guardar base64 para descarga directa
+        // Obtener Base64 para descarga y almacenamiento en Supabase
         const readerBase64 = new FileReader();
-        readerBase64.onload = () => {
+        readerBase64.onload = async () => {
           const b64 = readerBase64.result as string;
           setExcelRawBase64(b64);
           try {
@@ -111,12 +220,36 @@ const ProgramacionMultimedia: React.FC = () => {
           } catch {
             // almacenamiento seguro
           }
+
+          // Guardar en la Nube de Supabase
+          if (isSupabaseConfigured) {
+            try {
+              const { error } = await supabase.from('programacion_multimedia').upsert({
+                id: 'actual',
+                excel_nombre: fileName,
+                excel_filas: cleanRows,
+                excel_raw: b64,
+                updated_at: new Date().toISOString(),
+              });
+
+              if (!error) {
+                setUsandoSupabase(true);
+                alert('✅ ¡Hoja de Excel guardada con éxito en la nube! Ahora es visible en todas las computadoras y teléfonos.');
+              } else {
+                console.warn('Detalle al subir Excel a Supabase:', error);
+                alert('Aviso: El Excel se guardó localmente. Si aún no creaste la tabla en Supabase, ejecuta el script SQL.');
+              }
+            } catch (supaErr) {
+              console.warn('Error en Supabase:', supaErr);
+            }
+          }
+          setGuardandoEnNube(false);
         };
         readerBase64.readAsDataURL(file);
-
       } catch (err) {
         console.error(err);
         alert('Error al procesar el archivo Excel. Asegúrate de que sea un archivo .xlsx válido.');
+        setGuardandoEnNube(false);
       }
     }
   };
@@ -135,50 +268,104 @@ const ProgramacionMultimedia: React.FC = () => {
     }
   };
 
-  const handleEliminarExcel = () => {
-    if (window.confirm('¿Deseas quitar la hoja de Excel actual de la programación?')) {
+  // Eliminar Excel
+  const handleEliminarExcel = async () => {
+    if (window.confirm('¿Deseas quitar la hoja de Excel actual de la programación? Se eliminará de la nube para todos los dispositivos.')) {
       setExcelData(null);
       setExcelRawBase64(null);
       localStorage.removeItem(PROGRAMACION_EXCEL_KEY);
       localStorage.removeItem(PROGRAMACION_EXCEL_NAME_KEY);
       localStorage.removeItem(PROGRAMACION_EXCEL_RAW_KEY);
       if (fileInputExcelRef.current) fileInputExcelRef.current.value = '';
+
+      if (isSupabaseConfigured) {
+        try {
+          await supabase.from('programacion_multimedia').update({
+            excel_nombre: null,
+            excel_filas: null,
+            excel_raw: null,
+            updated_at: new Date().toISOString(),
+          }).eq('id', 'actual');
+        } catch (err) {
+          console.warn('Error al limpiar Excel en Supabase:', err);
+        }
+      }
     }
   };
 
-  // Manejo de carga de foto
-  const handleSubirFoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Manejo de carga de foto con compresión y guardado en la nube
+  const handleSubirFoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const result = event.target?.result as string;
-        setFotoProgramacion(result);
+      setGuardandoEnNube(true);
+
+      try {
+        const compressedDataUrl = await comprimirFoto(file, 1600, 0.82);
+        setFotoProgramacion(compressedDataUrl);
         setFormatoActivo('imagen');
+
         try {
-          localStorage.setItem(PROGRAMACION_IMG_KEY, result);
+          localStorage.setItem(PROGRAMACION_IMG_KEY, compressedDataUrl);
         } catch {
-          console.warn('Espacio limitado para guardar imagen completa.');
+          console.warn('Espacio limitado para guardar imagen completa localmente.');
         }
-      };
-      reader.readAsDataURL(file);
+
+        // Guardar en la Nube de Supabase
+        if (isSupabaseConfigured) {
+          try {
+            const { error } = await supabase.from('programacion_multimedia').upsert({
+              id: 'actual',
+              foto_url: compressedDataUrl,
+              updated_at: new Date().toISOString(),
+            });
+
+            if (!error) {
+              setUsandoSupabase(true);
+              alert('✅ ¡Foto de la programación guardada con éxito en la nube! Ya se ve en todos los dispositivos.');
+            } else {
+              console.warn('Detalle al subir foto a Supabase:', error);
+            }
+          } catch (supaErr) {
+            console.warn('Error al guardar foto en Supabase:', supaErr);
+          }
+        }
+      } catch (err) {
+        console.error('Error al procesar la foto:', err);
+        alert('Hubo un inconveniente al cargar la fotografía.');
+      } finally {
+        setGuardandoEnNube(false);
+      }
     }
   };
 
-  const handleEliminarFoto = () => {
-    if (window.confirm('¿Deseas quitar la imagen actual de la programación?')) {
+  // Eliminar Foto
+  const handleEliminarFoto = async () => {
+    if (window.confirm('¿Deseas quitar la imagen actual de la programación? Se quitará de la nube para todos.')) {
       setFotoProgramacion(null);
       localStorage.removeItem(PROGRAMACION_IMG_KEY);
       if (fileInputFotoRef.current) fileInputFotoRef.current.value = '';
+
+      if (isSupabaseConfigured) {
+        try {
+          await supabase.from('programacion_multimedia').update({
+            foto_url: null,
+            updated_at: new Date().toISOString(),
+          }).eq('id', 'actual');
+        } catch (err) {
+          console.warn('Error al limpiar foto en Supabase:', err);
+        }
+      }
     }
   };
 
   // Filtrado de filas en la tabla Excel
-  const rowsFiltradas = excelData ? excelData.rows.filter((r, idx) => {
-    if (idx === 0) return true; // Siempre mostrar cabecera
-    if (!busquedaExcel.trim()) return true;
-    return r.some(c => String(c).toLowerCase().includes(busquedaExcel.toLowerCase()));
-  }) : [];
+  const rowsFiltradas = excelData
+    ? excelData.rows.filter((r, idx) => {
+        if (idx === 0) return true; // Siempre mostrar cabecera
+        if (!busquedaExcel.trim()) return true;
+        return r.some(c => String(c).toLowerCase().includes(busquedaExcel.toLowerCase()));
+      })
+    : [];
 
   return (
     <div className="page-wrapper">
@@ -188,6 +375,40 @@ const ProgramacionMultimedia: React.FC = () => {
         <p>
           Consulta los turnos del equipo cargando la hoja de cálculo de Excel (.xlsx), la imagen oficial o accediendo al enlace en la nube.
         </p>
+
+        {/* Indicador de Estado Cloud vs Local */}
+        <div className="db-status-container" style={{ margin: '12px 0 16px' }}>
+          {usandoSupabase ? (
+            <span
+              className="badge"
+              style={{
+                background: 'rgba(16, 185, 129, 0.2)',
+                color: '#10b981',
+                border: '1px solid rgba(16, 185, 129, 0.4)',
+                fontSize: '0.82rem'
+              }}
+            >
+              🟢 Sincronizado en Supabase Cloud (Visible en todas las computadoras)
+            </span>
+          ) : (
+            <span
+              className="badge"
+              style={{
+                background: 'rgba(245, 158, 11, 0.2)',
+                color: '#f59e0b',
+                border: '1px solid rgba(245, 158, 11, 0.4)',
+                fontSize: '0.82rem'
+              }}
+            >
+              🟡 Modo Local (LocalStorage)
+            </span>
+          )}
+          {guardandoEnNube && (
+            <span className="badge" style={{ marginLeft: 8, background: 'var(--accent-dim)', color: 'var(--accent)' }}>
+              ⏳ Guardando en la nube...
+            </span>
+          )}
+        </div>
 
         {/* Botón destacado al enlace oficial */}
         <div className="prog-hero-action">
@@ -203,16 +424,13 @@ const ProgramacionMultimedia: React.FC = () => {
       </div>
 
       <div className="container section">
-        {/* BANNER DEL ENLACE OFICIAL */}
+        {/* Banner Informativo con Enlace Oficial */}
         <div className="link-banner-card">
+          <div className="link-banner-icon">📊</div>
           <div className="link-banner-info">
-            <span className="badge">Sincronización en la Nube</span>
-            <h3>Hoja Oficial de Turnos y Roles</h3>
+            <h3>Hoja Oficial de Roles en Google Sheets</h3>
             <p>
-              El documento oficial se mantiene actualizado en la nube. Enlace directo:{' '}
-              <a href={LINK_OFICIAL} target="_blank" rel="noopener noreferrer" className="link-url-text">
-                {LINK_OFICIAL}
-              </a>
+              El rol semanal oficial y dinámico se mantiene en Google Drive. Puedes abrir la hoja en vivo en cualquier momento para ver las últimas actualizaciones realizadas por el liderazgo.
             </p>
           </div>
           <a
@@ -221,37 +439,43 @@ const ProgramacionMultimedia: React.FC = () => {
             rel="noopener noreferrer"
             className="btn-outline btn-open-link"
           >
-            Abrir en Línea ↗
+            Abrir Enlace Oficial ↗
           </a>
         </div>
 
-        {/* SELECTOR DE PESTAÑAS: EXCEL vs IMAGEN */}
-        <div className="prog-tabs-bar">
+        {/* Selector de Pestaña: Excel vs Imagen */}
+        <div className="formato-tabs-bar">
           <button
             type="button"
-            className={`prog-tab-btn ${formatoActivo === 'excel' ? 'active' : ''}`}
+            className={`tab-btn ${formatoActivo === 'excel' ? 'active' : ''}`}
             onClick={() => setFormatoActivo('excel')}
           >
-            📊 Hoja de Cálculo Excel {excelData ? `(${excelData.fileName})` : ''}
+            📑 Tabla Interactiva de Excel (.xlsx)
           </button>
           <button
             type="button"
-            className={`prog-tab-btn ${formatoActivo === 'imagen' ? 'active' : ''}`}
+            className={`tab-btn ${formatoActivo === 'imagen' ? 'active' : ''}`}
             onClick={() => setFormatoActivo('imagen')}
           >
-            🖼️ Imagen del Rol de Turnos {fotoProgramacion ? '✓' : ''}
+            📷 Foto / Afiche de Programación
           </button>
         </div>
 
+        {cargandoNube && (
+          <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)' }}>
+            ⏳ Consultando programación actualizada desde la nube...
+          </div>
+        )}
+
         {/* ======================================================== */}
-        {/* PESTAÑA 1: VISOR DE EXCEL                                */}
+        {/* PESTAÑA 1: VISOR INTERACTIVO DE EXCEL                    */}
         {/* ======================================================== */}
         {formatoActivo === 'excel' && (
           <div className="excel-prog-section">
             <div className="excel-prog-header">
               <div>
                 <h2 className="section-title">
-                  Hoja de Turnos <span>Excel</span>
+                  Hoja de <span>Programación Excel</span>
                 </h2>
                 <p className="section-subtitle">
                   {excelData
@@ -280,7 +504,7 @@ const ProgramacionMultimedia: React.FC = () => {
                         type="button"
                         onClick={handleEliminarExcel}
                         className="btn-outline btn-quitar-foto"
-                        title="Quitar archivo Excel"
+                        title="Quitar archivo Excel de la nube"
                       >
                         Quitar
                       </button>
@@ -313,7 +537,7 @@ const ProgramacionMultimedia: React.FC = () => {
                     type="text"
                     placeholder="🔍 Filtrar por nombre de encargado, fecha o área..."
                     value={busquedaExcel}
-                    onChange={(e) => setBusquedaExcel(e.target.value)}
+                    onChange={e => setBusquedaExcel(e.target.value)}
                     className="excel-search-input"
                   />
                   {busquedaExcel && (
@@ -321,30 +545,33 @@ const ProgramacionMultimedia: React.FC = () => {
                       Mostrando {rowsFiltradas.length} fila(s)
                     </span>
                   )}
+                  {busquedaExcel && (
+                    <button
+                      type="button"
+                      className="btn-link"
+                      onClick={() => setBusquedaExcel('')}
+                    >
+                      Limpiar filtro
+                    </button>
+                  )}
                 </div>
 
-                <div className="excel-table-scroll">
-                  <table className="excel-rendered-table">
+                {/* Tabla de Excel con scroll horizontal responsivo */}
+                <div className="table-responsive-container">
+                  <table className="excel-table">
                     <thead>
-                      {rowsFiltradas.length > 0 && (
-                        <tr>
-                          {rowsFiltradas[0].map((cell, colIdx) => (
-                            <th key={colIdx}>{cell !== undefined && cell !== null ? String(cell) : ''}</th>
-                          ))}
-                        </tr>
-                      )}
+                      <tr>
+                        {excelData.rows[0].map((headerCell, idx) => (
+                          <th key={idx}>{String(headerCell)}</th>
+                        ))}
+                      </tr>
                     </thead>
                     <tbody>
                       {rowsFiltradas.slice(1).map((row, rowIdx) => (
                         <tr key={rowIdx}>
-                          {rowsFiltradas[0].map((_, colIdx) => {
-                            const val = row[colIdx];
-                            return (
-                              <td key={colIdx}>
-                                {val !== undefined && val !== null ? String(val) : ''}
-                              </td>
-                            );
-                          })}
+                          {row.map((cell, colIdx) => (
+                            <td key={colIdx}>{String(cell)}</td>
+                          ))}
                         </tr>
                       ))}
                     </tbody>
@@ -364,7 +591,9 @@ const ProgramacionMultimedia: React.FC = () => {
                     : 'Puedes consultar el enlace oficial de la programación en la nube o consultar la pestaña de afiche.'}
                 </p>
                 {isAdmin && (
-                  <span className="btn-link" style={{ marginTop: 12 }}>+ Seleccionar archivo Excel (.xlsx)</span>
+                  <span className="btn-link" style={{ marginTop: 12 }}>
+                    + Seleccionar archivo Excel (.xlsx)
+                  </span>
                 )}
               </div>
             )}
@@ -404,7 +633,7 @@ const ProgramacionMultimedia: React.FC = () => {
                         type="button"
                         onClick={handleEliminarFoto}
                         className="btn-outline btn-quitar-foto"
-                        title="Quitar foto actual"
+                        title="Quitar foto actual de la nube"
                       >
                         Quitar
                       </button>
@@ -448,18 +677,25 @@ const ProgramacionMultimedia: React.FC = () => {
 
       {/* LIGHTBOX FOTO COMPLETA */}
       {lightboxAbierto && fotoProgramacion && (
-        <div className="lightbox-overlay" onClick={() => setLightboxAbierto(false)}>
-          <button
-            type="button"
-            className="lightbox-close"
-            onClick={() => setLightboxAbierto(false)}
-          >
-            ✕
-          </button>
-          <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
-            <img src={fotoProgramacion} alt="Programación ampliada" />
-            <div className="lightbox-caption">
-              <span>Programación de Multimedia - ICJ Santa Ana</span>
+        <div className="prog-lightbox-overlay" onClick={() => setLightboxAbierto(false)}>
+          <div className="prog-lightbox-container" onClick={e => e.stopPropagation()}>
+            <button
+              type="button"
+              className="prog-lightbox-close"
+              onClick={() => setLightboxAbierto(false)}
+            >
+              ✕
+            </button>
+            <img src={fotoProgramacion} alt="Programación completa" className="prog-lightbox-img" />
+            <div className="prog-lightbox-footer">
+              <span>Programación Multimedia • ICJ Santa Ana</span>
+              <a
+                href={fotoProgramacion}
+                download="Programacion_Multimedia.jpg"
+                className="btn-primary"
+              >
+                📥 Descargar Afiche
+              </a>
             </div>
           </div>
         </div>

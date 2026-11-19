@@ -118,7 +118,7 @@ const Alabanzas: React.FC = () => {
   const [modalEditarAbierto, setModalEditarAbierto] = useState(false);
   const [cancionEnEdicion, setCancionEnEdicion] = useState<Cancion | null>(null);
 
-  // Cargar canciones (primero Supabase, con fallback a localStorage)
+  // Cargar canciones (primero Supabase Cloud, con fallback a localStorage)
   const cargarCanciones = async () => {
     setCargando(true);
     if (isSupabaseConfigured) {
@@ -128,23 +128,27 @@ const Alabanzas: React.FC = () => {
           .select('*')
           .order('created_at', { ascending: false });
 
-        if (!error && data && data.length > 0) {
-          const mapeadas: Cancion[] = data.map((item: any) => ({
-            id: item.id,
-            titulo: item.titulo,
-            artista: item.artista || 'Autor Desconocido',
-            tono: item.tono || 'G (Sol Mayor)',
-            tiempo: item.tiempo || '4/4',
-            categoria: item.categoria || 'Adoración',
-            letra: item.letra,
-            esPersonalizada: true
-          }));
-
-          setCanciones(mapeadas);
-          setCancionSeleccionada(mapeadas[0]);
+        if (!error && Array.isArray(data)) {
           setUsandoSupabase(true);
-          setCargando(false);
-          return;
+          if (data.length > 0) {
+            const mapeadas: Cancion[] = data.map((item: any) => ({
+              id: item.id,
+              titulo: item.titulo,
+              artista: item.artista || 'Autor Desconocido',
+              tono: item.tono || 'G (Sol Mayor)',
+              tiempo: item.tiempo || '4/4',
+              categoria: item.categoria || 'Adoración',
+              letra: item.letra,
+              esPersonalizada: true
+            }));
+
+            setCanciones(mapeadas);
+            setCancionSeleccionada(mapeadas[0]);
+            setCargando(false);
+            return;
+          }
+        } else if (error) {
+          console.warn('Detalle al consultar Supabase alabanzas:', error.message);
         }
       } catch (err) {
         console.warn('Error conectando a Supabase, usando respaldo local:', err);
@@ -250,7 +254,12 @@ Total de temas: ${canciones.length}
       return;
     }
 
+    const nuevoId = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `alabanza-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
     const payload = {
+      id: nuevoId,
       titulo: nuevaCancion.titulo.trim(),
       artista: nuevaCancion.artista.trim() || 'Autor / Banda Local',
       tono: nuevaCancion.tono.trim() || 'C (Do Mayor)',
@@ -259,42 +268,50 @@ Total de temas: ${canciones.length}
       letra: nuevaCancion.letra.trim()
     };
 
-    if (usandoSupabase) {
+    let guardadoEnNube = false;
+
+    if (isSupabaseConfigured) {
       try {
         const { data, error } = await supabase
           .from('alabanzas')
           .insert([payload])
           .select();
 
-        if (error) {
-          alert('Error al guardar en Supabase: ' + error.message);
-          return;
-        }
-
-        if (data && data[0]) {
+        if (!error && data && data[0]) {
           const guardada: Cancion = {
-            id: data[0].id,
             ...payload,
+            id: data[0].id,
             esPersonalizada: true
           };
           const actualizado = [guardada, ...canciones];
           setCanciones(actualizado);
           setCancionSeleccionada(guardada);
+          setUsandoSupabase(true);
+          guardadoEnNube = true;
+          alert('✅ ¡Alabanza guardada con éxito en la nube de Supabase! Ahora es visible en todas las computadoras y teléfonos.');
+        } else if (error) {
+          console.warn('Detalle al guardar en Supabase:', error.message);
+          alert('Aviso: Hubo un detalle al guardar en la nube (' + error.message + '). Se guardó copia local en este equipo.');
         }
       } catch (err) {
         console.error(err);
       }
-    } else {
-      // LocalStorage
+    }
+
+    if (!guardadoEnNube) {
+      // LocalStorage fallback
       const localCancion: Cancion = {
-        id: `local-${Date.now()}`,
         ...payload,
         esPersonalizada: true
       };
       const actualizado = [localCancion, ...canciones];
       setCanciones(actualizado);
       setCancionSeleccionada(localCancion);
-      localStorage.setItem(STORAGE_ALABANZAS_KEY, JSON.stringify(actualizado));
+      try {
+        localStorage.setItem(STORAGE_ALABANZAS_KEY, JSON.stringify(actualizado));
+      } catch {
+        // almacenamiento seguro
+      }
     }
 
     setModalAbierto(false);
@@ -333,7 +350,7 @@ Total de temas: ${canciones.length}
       letra: cancionEnEdicion.letra.trim()
     };
 
-    if (usandoSupabase && typeof cancionEnEdicion.id === 'string' && !cancionEnEdicion.id.startsWith('base-')) {
+    if (isSupabaseConfigured && typeof cancionEnEdicion.id === 'string' && !cancionEnEdicion.id.startsWith('base-')) {
       try {
         const { error } = await supabase
           .from('alabanzas')
@@ -341,8 +358,9 @@ Total de temas: ${canciones.length}
           .eq('id', cancionEnEdicion.id);
 
         if (error) {
-          alert('Error al modificar en Supabase: ' + error.message);
-          return;
+          console.warn('Error al modificar en Supabase: ' + error.message);
+        } else {
+          setUsandoSupabase(true);
         }
       } catch (err) {
         console.error(err);
@@ -371,7 +389,7 @@ Total de temas: ${canciones.length}
   const handleEliminarCancion = async (id: string | number, e: React.MouseEvent) => {
     e.stopPropagation();
     if (window.confirm('¿Deseas eliminar esta alabanza del repertorio?')) {
-      if (usandoSupabase && typeof id === 'string' && !id.startsWith('base-')) {
+      if (isSupabaseConfigured && typeof id === 'string' && !id.startsWith('base-')) {
         try {
           const { error } = await supabase
             .from('alabanzas')
@@ -379,8 +397,7 @@ Total de temas: ${canciones.length}
             .eq('id', id);
 
           if (error) {
-            alert('Error al eliminar en Supabase: ' + error.message);
-            return;
+            console.warn('Error al eliminar en Supabase: ' + error.message);
           }
         } catch (err) {
           console.error(err);
